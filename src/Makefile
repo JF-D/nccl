@@ -39,8 +39,13 @@ LDFLAGS    += -L${CUDA_LIB} -l$(CUDARTLIB) -lpthread -lrt -ldl
 
 DEVICELIB  := $(BUILDDIR)/obj/collectives/device/colldevice.a
 
+PYTHON := $(shell which python)
+PYPATH := $(PYTHON:%/bin/python=%/include/python3.8) # change PY Module PATH
+PYBIND11_INCDIR := $(abspath ..)/3rdparty/pybind11/include
+PROTEUS_DIR := /home/duanjiangfei/Proteus/proteus
+
 ##### rules
-build : lib staticlib
+build : lib staticlib binding
 
 lib : $(INCTARGETS) $(LIBDIR)/$(LIBTARGET) $(PKGDIR)/$(PKGTARGET)
 
@@ -128,6 +133,15 @@ install : lib
 	cp -P -v $(BUILDDIR)/lib/lib* $(PREFIX)/lib/
 	cp -P -v $(BUILDDIR)/lib/pkgconfig/* $(PREFIX)/lib/pkgconfig/
 	cp -v $(BUILDDIR)/include/* $(PREFIX)/include/
+
+binding : binding/binding.cc $(LIBOBJ) $(DEVICELIB)
+	$(CXX) -I. -I$(INCDIR) -Iinclude -Igraph -Ibinding -Icollectives/device \
+		-I$(PYBIND11_INCDIR) -I$(PYPATH) $(CXXFLAGS) -fpermissive -shared \
+		binding/binding.cc $(LIBOBJ) $(DEVICELIB) \
+		-o $(BUILDDIR)/binding`python3-config --extension-suffix` \
+		$(LDFLAGS) -L$(BUILDDIR)/lib -lnccl
+
+	ln -snf $(BUILDDIR)/binding`python3-config --extension-suffix` $(PROTEUS_DIR)/binding`python3-config --extension-suffix`
 
 FILESTOFORMAT := $(shell find . -name ".\#*" -prune -o \( -name "*.cc" -o -name "*.h" \) -print | grep -v -E 'ibvwrap.h|nvmlwrap.h|gdrwrap.h|nccl.h')
 # Note that formatting.mk defines a new target so in order to not overwrite the default target,
