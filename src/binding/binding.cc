@@ -171,7 +171,22 @@ Communicator::Communicator(std::vector<std::vector<int>> groups,
       memcpy(comm->channels + comm->nChannels + i, comm->channels + nChannelsOrig + i, sizeof(struct ncclChannel));
   }
 
+  typeIntra_ = ringGraph.typeIntra;
+  typeInter_ = ringGraph.typeInter;
+  crossNode_ = nNodes > 1;
   ncclTopoTuneModel(comm, minCompCap, maxCompCap, &treeGraph, &ringGraph, &collNetGraph);
+}
+
+int Communicator::get_graph_type_intra() {
+  return typeIntra_;
+}
+
+int Communicator::get_graph_type_inter() {
+  return typeInter_;
+}
+
+bool Communicator::get_cross_node() {
+  return crossNode_;
 }
 
 float getAlgoInfo(struct ncclInfo* info, int collNetTypeSupport, int numPipeOps) {
@@ -260,5 +275,8 @@ PYBIND11_MODULE(binding, m) {
       .def("reduce", &Communicator::reduce)
       .def("allreduce", &Communicator::allreduce)
       .def("allgather", &Communicator::allgather)
-      .def("reduce_scatter", &Communicator::reducescatter);
+      .def("reduce_scatter", &Communicator::reducescatter)
+      .def("get_graph_type_intra", &Communicator::get_graph_type_intra)
+      .def("get_graph_type_inter", &Communicator::get_graph_type_inter)
+      .def("get_cross_node", &Communicator::get_cross_node);
 }

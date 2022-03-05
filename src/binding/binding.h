@@ -26,7 +26,15 @@ public:
 
   float reducescatter(size_t nBytes);
 
+  int get_graph_type_intra();
+
+  int get_graph_type_inter();
+
+  bool get_cross_node();
+
   struct ncclComm* comm;
+  int typeIntra_, typeInter_;
+  bool crossNode_;
 };
 
 
