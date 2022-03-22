@@ -189,38 +189,66 @@ bool Communicator::get_cross_node() {
   return crossNode_;
 }
 
-float getAlgoInfo(struct ncclInfo* info, int collNetTypeSupport, int numPipeOps) {
+// Trees are not perfectly sticking to the model for medium sizes. Applying a static correction
+// factor is not ideal but works quite well. Powers of two, 64 B to 256MB.
+static float treeCorrectionFactor[NCCL_NUM_PROTOCOLS][23] = {
+  { 1.0, 1.0, 1.0, 1.0,  .9,  .8,  .7,  .7,  .7,  .7,  .6,  .5,  .4,  .4,  .5,  .6,  .7,  .8,  .9, 1.0, 1.0, 1.0, 1.0 },
+  { 1.0, 1.0, 1.0, 1.0, 1.0,  .9,  .8,  .8,  .8,  .7,  .6,  .6,  .6,  .6,  .6,  .6,  .8,  .9,  .9,  .9,  .9, 1.0, 1.0 },
+  {  .9,  .9,  .9,  .9,  .9,  .9,  .9,  .8,  .7,  .6,  .6,  .5,  .5,  .5,  .5,  .6,  .7,  .8,  .7,  .7,  .8,  .9,  .9 }
+};
+
+std::vector<float> ncclTopoGetAlgoBW(struct ncclInfo* info, int algorithm, int protocol, int numPipeOps, float* time) {
+  float bw = info->comm->bandwidths[info->coll][algorithm][protocol];
+  float lat = info->comm->latencies[info->coll][algorithm][protocol];
+  if (bw == 0) {
+    *time = -1.0;
+    return std::vector<float>({bw, lat});
+  }
+  int logSize = log2i(info->nBytes>>6);
+  if (algorithm == NCCL_ALGO_TREE && logSize < 23) bw *= treeCorrectionFactor[protocol][logSize];
+  if (info->nChannels != 0) bw = bw / info->comm->nChannels * info->nChannels;
+  if (algorithm == NCCL_ALGO_RING && protocol == NCCL_PROTO_SIMPLE && info->comm->nNodes > 1
+      && info->coll == ncclFuncAllReduce && info->nBytes >= info->comm->nRanks/16.0*65536) lat *= 1.9; // Plateau effect of ring
+  // Tree pipelining saves latency in aggregation cases
+  int latCount = algorithm == NCCL_ALGO_RING ? numPipeOps : DIVUP(numPipeOps, NCCL_MAX_WORK_ELEMENTS);
+  *time = lat * latCount + (info->nBytes) / (1000 * bw);
+  return std::vector<float>({bw, lat * latCount});
+}
+
+std::vector<float> getAlgoInfo(struct ncclInfo* info, int collNetTypeSupport, int numPipeOps) {
   // Ring Simple
   float time;
-  ncclTopoGetAlgoTime(info, 1, 2, numPipeOps, &time);
-  if (time >= 0) return time * 1e-3;
+  std::vector<float> ret = ncclTopoGetAlgoBW(info, 1, 2, numPipeOps, &time);
+  if (time >= 0) return ret;
 
   float minTime = 3600000000.0; // Hopefully no operation will take an hour to complete.
   // Find algorithm / protocol.
   info->algorithm = -1;
   info->protocol = -1;
-  if (info->comm->nRanks == 1) return 0;
+  if (info->comm->nRanks == 1) return std::vector<float>({0, 0});
   int nAlgos = NCCL_NUM_ALGORITHMS;
   for (int a=0; a<nAlgos; a++) {
     if (a == NCCL_ALGO_COLLNET && collNetTypeSupport != 1) continue;
     for (int p=0; p<NCCL_NUM_PROTOCOLS; p++) {
       float time;
-      ncclTopoGetAlgoTime(info, a, p, numPipeOps, &time);
+      std::vector<float> out = ncclTopoGetAlgoBW(info, a, p, numPipeOps, &time);
       if (time >= 0 && time < minTime) {
         info->algorithm = a;
         info->protocol = p;
         minTime = time;
+        ret[0] = out[0];
+        ret[1] = out[1];
       }
     }
   }
   if (info->algorithm == -1 || info->protocol == -1) {
     WARN("Error : no algorithm/protocol available");
-    return 0;
+    return std::vector<float>({0, 0});
   }
-  return minTime * 1e-3;
+  return ret;
 }
 
-float Communicator::broadcast(size_t nBytes, int root){
+std::vector<float> Communicator::broadcast(size_t nBytes, int root){
   struct ncclInfo info = {ncclFuncBroadcast, "Broadcast",
                           nullptr, nullptr, nBytes, ncclChar, ncclSum, root, comm, nullptr, /* Args */
                           BROADCAST_CHUNKSTEPS, BROADCAST_SLICESTEPS};
@@ -229,7 +257,7 @@ float Communicator::broadcast(size_t nBytes, int root){
   return getAlgoInfo(&info, 0, 1);
 }
 
-float Communicator::reduce(size_t nBytes, int root){
+std::vector<float> Communicator::reduce(size_t nBytes, int root){
   struct ncclInfo info = {ncclFuncReduce, "Reduce",
                           nullptr, nullptr, nBytes, ncclChar, ncclSum, root, comm, nullptr, /* Args */
                           REDUCE_CHUNKSTEPS, REDUCE_SLICESTEPS};
@@ -239,7 +267,7 @@ float Communicator::reduce(size_t nBytes, int root){
 }
 
 
-float Communicator::allreduce(size_t nBytes){
+std::vector<float> Communicator::allreduce(size_t nBytes){
   struct ncclInfo info = {ncclFuncAllReduce, "AllReduce",
                           nullptr, nullptr, nBytes, ncclChar, ncclSum, 0, comm, nullptr, /* Args */
                           ALLREDUCE_CHUNKSTEPS, ALLREDUCE_SLICESTEPS};
@@ -248,7 +276,7 @@ float Communicator::allreduce(size_t nBytes){
   return getAlgoInfo(&info, 0, 1);
 }
 
-float Communicator::allgather(size_t nBytes){
+std::vector<float> Communicator::allgather(size_t nBytes){
   struct ncclInfo info = {ncclFuncAllGather, "AllGather",
                           nullptr, nullptr, nBytes, ncclChar, ncclSum, 0, comm, nullptr, /* Args */
                           ALLGATHER_CHUNKSTEPS, ALLGATHER_SLICESTEPS};
@@ -257,7 +285,7 @@ float Communicator::allgather(size_t nBytes){
   return getAlgoInfo(&info, 0, 1);
 }
 
-float Communicator::reducescatter(size_t nBytes){
+std::vector<float> Communicator::reducescatter(size_t nBytes){
   struct ncclInfo info = {ncclFuncReduceScatter, "ReduceScattere",
                           nullptr, nullptr, nBytes, ncclChar, ncclSum, 0, comm, nullptr, /* Args */
                           REDUCESCATTER_CHUNKSTEPS, REDUCESCATTER_SLICESTEPS};

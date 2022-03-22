@@ -16,15 +16,15 @@ public:
   Communicator(std::vector<std::vector<int>> groups, std::vector<std::vector<int>> groupsRank,
       int nRanks, int nNodes, std::string topofile);
 
-  float broadcast(size_t nBytes, int root);
+  std::vector<float> broadcast(size_t nBytes, int root);
 
-  float reduce(size_t nBytes, int root);
+  std::vector<float> reduce(size_t nBytes, int root);
 
-  float allreduce(size_t nBytes);
+  std::vector<float> allreduce(size_t nBytes);
 
-  float allgather(size_t nBytes);
+  std::vector<float> allgather(size_t nBytes);
 
-  float reducescatter(size_t nBytes);
+  std::vector<float> reducescatter(size_t nBytes);
 
   int get_graph_type_intra();
 
